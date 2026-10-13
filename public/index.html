@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Registro de Pontos</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Controle pessoal</p>
+          <h1>Registro de Pontos</h1>
+        </div>
+      </header>
+
+      <section class="panel form-panel">
+        <h2>Marcar ponto</h2>
+        <form id="point-form">
+          <div class="field-row">
+            <div class="field-group">
+              <label for="observedAt">Data e hora</label>
+              <input id="observedAt" name="observedAt" type="datetime-local" required />
+            </div>
+
+            <div class="field-group">
+              <label for="type">Tipo</label>
+              <select id="type" name="type">
+                <option value="entrada">Entrada</option>
+                <option value="saida">Saída</option>
+                <option value="pausa">Pausa</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="field-group">
+            <label for="note">Observação</label>
+            <textarea id="note" name="note" rows="3" placeholder="Ex.: almoço, reunião, atendimento..."></textarea>
+          </div>
+
+          <button type="submit">Registrar ponto</button>
+        </form>
+      </section>
+
+      <section class="stats-grid">
+        <article class="panel stat-card">
+          <span class="label">Dias registrados</span>
+          <strong id="stat-days">0</strong>
+        </article>
+        <article class="panel stat-card">
+          <span class="label">Horas trabalhadas</span>
+          <strong id="stat-hours">0h 0m</strong>
+        </article>
+        <article class="panel stat-card">
+          <span class="label">Último registro</span>
+          <strong id="stat-last">-</strong>
+        </article>
+      </section>
+
+      <section class="panel filters-panel">
+        <h2>Histórico</h2>
+        <div class="filter-row">
+          <div class="field-group">
+            <label for="fromDate">De</label>
+            <input id="fromDate" type="date" />
+          </div>
+          <div class="field-group">
+            <label for="toDate">Até</label>
+            <input id="toDate" type="date" />
+          </div>
+          <button id="applyFilter" type="button" class="secondary">Aplicar</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Resumo diário</h2>
+        <div id="summaryTable" class="summary-table"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Registros</h2>
+        <div id="recordsTable" class="records-table"></div>
+      </section>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "name": "registro-pontos",
+  "version": "1.0.0",
+  "description": "Sistema web para registrar pontos e acompanhar histórico",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0"
+  }
+}
