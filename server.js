@@ -5,7 +5,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
-import { head, put } from '@vercel/blob';
+import {
+  BlobAccessError,
+  BlobError,
+  BlobClientTokenExpiredError,
+  BlobStoreNotFoundError,
+  get,
+  put,
+} from '@vercel/blob';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -13,6 +20,7 @@ const DATA_FILE = path.join(__dirname, 'data', 'records.json');
 const app = express();
 const port = process.env.PORT || 3000;
 const APP_TIME_ZONE = 'America/Sao_Paulo';
+const BLOB_ACCESS = process.env.BLOB_ACCESS || 'private';
 
 function ensureDataFile() {
   if (!fs.existsSync(DATA_FILE)) {
@@ -24,13 +32,12 @@ function ensureDataFile() {
 async function readRecords() {
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     try {
-      const blob = await head('records.json');
-      const response = await fetch(blob.downloadUrl);
-      if (!response.ok) throw new Error(`Falha ao ler armazenamento (HTTP ${response.status}).`);
-      const parsed = await response.json();
+      const blob = await get('records.json', { access: BLOB_ACCESS });
+      if (!blob) return [];
+      const parsed = JSON.parse(await new Response(blob.stream).text());
       return Array.isArray(parsed) ? parsed : [];
     } catch (error) {
-      if (error.status === 404 || error.code === 'blob_not_found' || error.name === 'BlobNotFoundError') return [];
+      if (error.name === 'BlobNotFoundError') return [];
       throw error;
     }
   }
@@ -52,7 +59,7 @@ async function readRecords() {
 async function writeRecords(records) {
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     await put('records.json', JSON.stringify(records, null, 2), {
-      access: 'public',
+      access: BLOB_ACCESS,
       addRandomSuffix: false,
       allowOverwrite: true,
       contentType: 'application/json',
@@ -239,11 +246,25 @@ app.delete('/api/records/:id', async (req, res, next) => {
 
 app.use('/api', (req, res) => res.status(404).json({ ok: false, message: 'Endpoint da API não encontrado.' }));
 app.use((error, req, res, next) => {
-  console.error(error);
+  console.error('Erro na API:', error);
   if (res.headersSent) return next(error);
-  res.status(error.status || 500).json({
+  let message = 'Erro interno ao processar a solicitação.';
+  let status = error.status || 500;
+  if (error instanceof BlobAccessError) {
+    message = `O Blob Store não corresponde ao modo configurado (BLOB_ACCESS=${BLOB_ACCESS}). Use um store ${BLOB_ACCESS} ou ajuste BLOB_ACCESS.`;
+    status = 503;
+  } else if (error instanceof BlobClientTokenExpiredError || error instanceof BlobStoreNotFoundError) {
+    message = 'A conexão com o Blob Store falhou. Reconecte o armazenamento ao projeto Vercel e faça um novo deploy.';
+    status = 503;
+  } else if (error instanceof BlobError) {
+    message = 'Falha ao acessar o Blob Store. Verifique o token, o ambiente Production e o modo de acesso do armazenamento.';
+    status = 503;
+  } else if (status === 503) {
+    message = error.message;
+  }
+  res.status(status).json({
     ok: false,
-    message: error.status === 503 ? error.message : 'Erro interno ao processar a solicitação.',
+    message,
   });
 });
 app.use(express.static(path.join(__dirname, 'public')));

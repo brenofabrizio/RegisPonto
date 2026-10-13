@@ -24,10 +24,12 @@ Acesse http://localhost:3000
 O servidor usa `data/records.json` localmente. Em produção, os dados precisam de armazenamento persistente:
 
 1. Importe este repositório na Vercel.
-2. No projeto Vercel, crie/conecte um **Blob Store**. A integração configura `BLOB_READ_WRITE_TOKEN`.
+2. No projeto Vercel, crie/conecte um **Blob Store privado**. A integração configura `BLOB_READ_WRITE_TOKEN`.
 3. Faça um novo deploy depois de conectar o armazenamento.
 
 Sem essa variável, a API retorna HTTP 503 com uma mensagem explicando como configurar o armazenamento. A Vercel não mantém arquivos gravados localmente entre chamadas.
+
+O app usa Blob privado por padrão para proteger os registros. Se o store já criado for público, adicione também `BLOB_ACCESS=public` nas variáveis de ambiente do projeto e faça um novo deploy. O SDK do Blob requer Node.js 20 ou superior.
 
 ## Estrutura
 
