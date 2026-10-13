@@ -5,12 +5,14 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import crypto from 'crypto';
+import { head, put } from '@vercel/blob';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DATA_FILE = path.join(__dirname, 'data', 'records.json');
 const app = express();
 const port = process.env.PORT || 3000;
+const APP_TIME_ZONE = 'America/Sao_Paulo';
 
 function ensureDataFile() {
   if (!fs.existsSync(DATA_FILE)) {
@@ -19,7 +21,24 @@ function ensureDataFile() {
   }
 }
 
-function readRecords() {
+async function readRecords() {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    try {
+      const blob = await head('records.json');
+      const response = await fetch(blob.downloadUrl);
+      if (!response.ok) throw new Error(`Falha ao ler armazenamento (HTTP ${response.status}).`);
+      const parsed = await response.json();
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (error) {
+      if (error.status === 404 || error.code === 'blob_not_found' || error.name === 'BlobNotFoundError') return [];
+      throw error;
+    }
+  }
+  if (process.env.VERCEL) {
+    const error = new Error('Armazenamento não configurado. Adicione um Blob Store e a variável BLOB_READ_WRITE_TOKEN na Vercel.');
+    error.status = 503;
+    throw error;
+  }
   ensureDataFile();
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
@@ -30,7 +49,21 @@ function readRecords() {
   }
 }
 
-function writeRecords(records) {
+async function writeRecords(records) {
+  if (process.env.BLOB_READ_WRITE_TOKEN) {
+    await put('records.json', JSON.stringify(records, null, 2), {
+      access: 'public',
+      addRandomSuffix: false,
+      allowOverwrite: true,
+      contentType: 'application/json',
+    });
+    return;
+  }
+  if (process.env.VERCEL) {
+    const error = new Error('Armazenamento não configurado. Adicione um Blob Store e a variável BLOB_READ_WRITE_TOKEN na Vercel.');
+    error.status = 503;
+    throw error;
+  }
   ensureDataFile();
   fs.writeFileSync(DATA_FILE, JSON.stringify(records, null, 2));
 }
@@ -42,8 +75,17 @@ function normalizeDateInput(value) {
 }
 
 function toDateKey(date) {
-  const d = new Date(date);
-  return d.toISOString().slice(0, 10);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(date));
+  const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
+function dateBoundary(date, end = false) {
+  const dayAfter = new Date(`${date}T00:00:00Z`);
+  if (end) dayAfter.setUTCDate(dayAfter.getUTCDate() + 1);
+  return new Date(`${dayAfter.toISOString().slice(0, 10)}T00:00:00-03:00`).getTime();
 }
 
 function formatMinutes(minutes) {
@@ -57,8 +99,8 @@ function buildSummary(records, fromDate, toDate) {
   const filtered = records.filter((item) => {
     const date = new Date(item.observedAt);
     if (Number.isNaN(date.getTime())) return false;
-    if (fromDate && date < new Date(fromDate + 'T00:00:00')) return false;
-    if (toDate && date > new Date(toDate + 'T23:59:59')) return false;
+    if (fromDate && date.getTime() < dateBoundary(fromDate)) return false;
+    if (toDate && date.getTime() >= dateBoundary(toDate, true)) return false;
     return true;
   });
 
@@ -122,23 +164,26 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, message: 'Registro de pontos online.', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/records', (req, res) => {
+app.get('/api/records', async (req, res, next) => {
+ try {
   const from = String(req.query.from || '');
   const to = String(req.query.to || '');
-  let records = [...readRecords()].sort((a, b) => new Date(b.observedAt) - new Date(a.observedAt));
+  let records = [...await readRecords()].sort((a, b) => new Date(b.observedAt) - new Date(a.observedAt));
 
   if (from) {
-    records = records.filter((item) => new Date(item.observedAt) >= new Date(`${from}T00:00:00`));
+    records = records.filter((item) => new Date(item.observedAt).getTime() >= dateBoundary(from));
   }
 
   if (to) {
-    records = records.filter((item) => new Date(item.observedAt) <= new Date(`${to}T23:59:59`));
+    records = records.filter((item) => new Date(item.observedAt).getTime() < dateBoundary(to, true));
   }
 
   res.json({ ok: true, data: records });
+ } catch (error) { next(error); }
 });
 
-app.post('/api/records', (req, res) => {
+app.post('/api/records', async (req, res, next) => {
+ try {
   const { type, observedAt, note } = req.body ?? {};
   const allowedTypes = ['entrada', 'saida', 'pausa'];
 
@@ -146,6 +191,9 @@ app.post('/api/records', (req, res) => {
     return res.status(400).json({ ok: false, message: 'Tipo de ponto inválido.' });
   }
 
+  if (observedAt && Number.isNaN(new Date(observedAt).getTime())) {
+    return res.status(400).json({ ok: false, message: 'Data e hora inválidas.' });
+  }
   const itemDate = normalizeDateInput(observedAt);
   const record = {
     id: crypto.randomUUID(),
@@ -155,24 +203,28 @@ app.post('/api/records', (req, res) => {
     createdAt: new Date().toISOString(),
   };
 
-  const records = readRecords();
+  const records = await readRecords();
   records.push(record);
-  writeRecords(records);
+  await writeRecords(records);
 
   return res.status(201).json({ ok: true, data: record });
+ } catch (error) { next(error); }
 });
 
-app.get('/api/summary', (req, res) => {
+app.get('/api/summary', async (req, res, next) => {
+ try {
   const from = String(req.query.from || '');
   const to = String(req.query.to || '');
-  const records = readRecords();
+  const records = await readRecords();
   const summary = buildSummary(records, from || null, to || null);
   res.json({ ok: true, data: summary });
+ } catch (error) { next(error); }
 });
 
-app.delete('/api/records/:id', (req, res) => {
+app.delete('/api/records/:id', async (req, res, next) => {
+ try {
   const { id } = req.params;
-  const records = readRecords();
+  const records = await readRecords();
   const index = records.findIndex((item) => item.id === id);
 
   if (index === -1) {
@@ -180,16 +232,28 @@ app.delete('/api/records/:id', (req, res) => {
   }
 
   const [removed] = records.splice(index, 1);
-  writeRecords(records);
+  await writeRecords(records);
   return res.json({ ok: true, data: removed });
+ } catch (error) { next(error); }
 });
 
+app.use('/api', (req, res) => res.status(404).json({ ok: false, message: 'Endpoint da API não encontrado.' }));
+app.use((error, req, res, next) => {
+  console.error(error);
+  if (res.headersSent) return next(error);
+  res.status(error.status || 500).json({
+    ok: false,
+    message: error.status === 503 ? error.message : 'Erro interno ao processar a solicitação.',
+  });
+});
 app.use(express.static(path.join(__dirname, 'public')));
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-app.listen(port, () => {
-  console.log(`Registro de pontos rodando em http://localhost:${port}`);
-});
+if (!process.env.VERCEL) {
+  app.listen(port, () => console.log(`Registro de pontos rodando em http://localhost:${port}`));
+}
+
+export default app;

@@ -25,6 +25,10 @@ const formatDateTime = (iso) => {
 };
 
 const formatDate = (iso) => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    const [year, month, day] = iso.split('-').map(Number);
+    return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short' }).format(new Date(year, month - 1, day));
+  }
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return '-';
   return new Intl.DateTimeFormat('pt-BR', { dateStyle: 'short' }).format(date);
@@ -37,17 +41,29 @@ const formatMinutes = (minutes) => {
   return `${hours}h ${mins}m`;
 };
 
+const escapeHTML = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[character]));
+
+async function readApiResponse(response, fallbackMessage) {
+  const contentType = response.headers.get('content-type') || '';
+  if (!contentType.includes('application/json')) {
+    throw new Error(response.ok ? fallbackMessage : `Servidor retornou erro HTTP ${response.status}.`);
+  }
+  const payload = await response.json();
+  if (!response.ok || !payload.ok) {
+    throw new Error(payload.message || `Erro HTTP ${response.status}.`);
+  }
+  return payload;
+}
+
 async function fetchRecords() {
   const params = new URLSearchParams();
   if (fromDate.value) params.set('from', fromDate.value);
   if (toDate.value) params.set('to', toDate.value);
 
   const response = await fetch(`/api/records?${params.toString()}`);
-  const payload = await response.json();
-
-  if (!response.ok || !payload.ok) {
-    throw new Error(payload.message || 'Erro ao buscar registros.');
-  }
+  const payload = await readApiResponse(response, 'Resposta inválida ao buscar registros.');
 
   return payload.data || [];
 }
@@ -58,11 +74,7 @@ async function fetchSummary() {
   if (toDate.value) params.set('to', toDate.value);
 
   const response = await fetch(`/api/summary?${params.toString()}`);
-  const payload = await response.json();
-
-  if (!response.ok || !payload.ok) {
-    throw new Error(payload.message || 'Erro ao buscar resumo.');
-  }
+  const payload = await readApiResponse(response, 'Resposta inválida ao buscar resumo.');
 
   return payload.data || { totalDays: 0, totalHours: '0h 0m', entries: [] };
 }
@@ -115,11 +127,11 @@ function renderRecords(records) {
     .map(
       (record) => `
         <tr>
-          <td><span class="badge ${record.type}">${typeLabels[record.type] || record.type}</span></td>
+          <td><span class="badge ${escapeHTML(record.type)}">${escapeHTML(typeLabels[record.type] || record.type)}</span></td>
           <td>${formatDateTime(record.observedAt)}</td>
-          <td>${record.note || '-'}</td>
+          <td>${escapeHTML(record.note || '-')}</td>
           <td>
-            <button class="secondary delete-btn" data-id="${record.id}">Excluir</button>
+            <button class="secondary delete-btn" data-id="${escapeHTML(record.id)}">Excluir</button>
           </td>
         </tr>
       `
@@ -167,15 +179,13 @@ async function loadData() {
 }
 
 async function deleteRecord(id) {
-  const response = await fetch(`/api/records/${id}`, { method: 'DELETE' });
-  const payload = await response.json();
-
-  if (!response.ok || !payload.ok) {
-    alert(payload.message || 'Erro ao excluir registro.');
-    return;
+  try {
+    const response = await fetch(`/api/records/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await readApiResponse(response, 'Resposta inválida ao excluir registro.');
+    await loadData();
+  } catch (error) {
+    alert(error.message || 'Erro ao excluir registro.');
   }
-
-  await loadData();
 }
 
 form.addEventListener('submit', async (event) => {
@@ -184,36 +194,40 @@ form.addEventListener('submit', async (event) => {
   const formData = new FormData(form);
   const payload = {
     type: formData.get('type'),
-    observedAt: formData.get('observedAt') || new Date().toISOString(),
+    observedAt: formData.get('observedAt') ? new Date(formData.get('observedAt')).toISOString() : new Date().toISOString(),
     note: formData.get('note') || '',
   };
 
-  const response = await fetch('/api/records', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  const result = await response.json();
-
-  if (!response.ok || !result.ok) {
-    alert(result.message || 'Erro ao registrar ponto.');
-    return;
+  try {
+    const response = await fetch('/api/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    await readApiResponse(response, 'Resposta inválida ao registrar ponto.');
+    form.reset();
+    setCurrentDateTime();
+    await loadData();
+  } catch (error) {
+    alert(error.message || 'Erro ao registrar ponto.');
   }
-
-  form.reset();
-  document.getElementById('observedAt').value = new Date().toISOString().slice(0, 16);
-  await loadData();
 });
 
 applyFilterBtn.addEventListener('click', loadData);
 
 window.addEventListener('DOMContentLoaded', () => {
   const today = new Date();
-  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
-  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().slice(0, 10);
+  const toLocalDate = (date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const firstDay = toLocalDate(new Date(today.getFullYear(), today.getMonth(), 1));
+  const lastDay = toLocalDate(new Date(today.getFullYear(), today.getMonth() + 1, 0));
   fromDate.value = firstDay;
   toDate.value = lastDay;
-  document.getElementById('observedAt').value = new Date().toISOString().slice(0, 16);
+  setCurrentDateTime();
   loadData();
 });
+
+function setCurrentDateTime() {
+  const now = new Date();
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+  document.getElementById('observedAt').value = local.toISOString().slice(0, 16);
+}
